@@ -165,7 +165,7 @@ func InitializeCurrentUSB(request InitializeCurrentUSBRequest) (InitializeCurren
 		Total:      3,
 		TotalKnown: true,
 		Status:     "完成",
-		Detail:     "已创建当前 U 盘数据库",
+		Detail:     "已创建数据库文件",
 	}
 	emitAppProgress(request.Progress, event)
 	if err := store.UpsertMachine(request.MachineID, request.DisplayName, request.WorkRoot, request.SeenAt); err != nil {
@@ -223,7 +223,7 @@ func InitializeCurrentUSB(request InitializeCurrentUSBRequest) (InitializeCurren
 			Total:      3,
 			TotalKnown: true,
 			Status:     "完成",
-			Detail:     "已创建当前 U 盘数据库",
+			Detail:     "已创建数据库文件",
 		}, {
 			Phase:      "initialize",
 			Item:       request.DisplayName,
@@ -478,7 +478,7 @@ func SyncCurrentUSB(request SyncCurrentUSBRequest) (SyncCurrentUSBResult, error)
 			Total:      0,
 			TotalKnown: true,
 			Status:     "完成",
-			Detail:     "没有需要写入 U 盘的本地变化",
+			Detail:     "没有需要写入数据库的本地变化",
 		})
 		emitAppProgress(request.Progress, progress[len(progress)-1])
 	}
@@ -560,17 +560,18 @@ func defaultMachineConfigPath(
 
 func driveStatusText(state StartupState, err error) string {
 	if err == nil {
-		driveText := strings.TrimSuffix(state.Drive.RootPath, `\`)
-		if driveText == "" {
-			driveText = state.Drive.RootPath
+		dbPath := strings.TrimSpace(state.Drive.DBPath)
+		if dbPath != "" {
+			return dbPath
 		}
-		if strings.TrimSpace(state.Drive.VolumeName) != "" {
-			return fmt.Sprintf("当前 U 盘：%s  卷名：%s", driveText, state.Drive.VolumeName)
+		exeDir := strings.TrimSpace(state.Drive.ExeDir)
+		if exeDir != "" {
+			return filepath.Join(exeDir, usb.DatabaseFileName)
 		}
-		if driveText != "" {
-			return fmt.Sprintf("当前 U 盘：%s", driveText)
+		if strings.TrimSpace(state.Drive.RootPath) != "" {
+			return filepath.Join(state.Drive.RootPath, usb.DatabaseFileName)
 		}
-		return "已识别到当前 U 盘"
+		return usb.DatabaseFileName
 	}
 
 	return err.Error()
@@ -593,7 +594,7 @@ func buildMainViewModel(state StartupState, stateErr error) ui.MainViewModel {
 			initializeEnabled = true
 			syncEnabled = false
 			results = ui.ResultSummary{
-				Status: "工作文件夹已更换，请重新初始化当前 U 盘",
+				Status: "工作文件夹已更换，请重新初始化数据库",
 			}
 		}
 	}
@@ -602,6 +603,7 @@ func buildMainViewModel(state StartupState, stateErr error) ui.MainViewModel {
 		WorkRoot:          state.MachineConfig.LastWorkRoot,
 		DisplayName:       state.MachineConfig.DisplayName,
 		BackupDir:         state.MachineConfig.BackupDir,
+		DatabasePath:      state.Drive.DBPath,
 		DriveStatus:       driveStatus,
 		InitializeEnabled: initializeEnabled,
 		SyncEnabled:       syncEnabled,
@@ -675,6 +677,7 @@ func mapKnownEntries(records []db.EntryRecord) []syncpreview.KnownEntry {
 			DisplayPath:  record.DisplayPath,
 			Kind:         record.Kind,
 			Size:         record.Size,
+			CtimeNS:      record.CtimeNS,
 			MtimeNS:      record.MtimeNS,
 			MD5:          record.ContentMD5,
 			Deleted:      record.Deleted,
@@ -697,6 +700,7 @@ func mapRemoteChanges(records []db.ChangeRecord) []syncpreview.RemoteChange {
 			DisplayPath:  record.DisplayPath,
 			Kind:         record.Kind,
 			BaseRevision: record.BaseRevision,
+			CtimeNS:      record.CtimeNS,
 			MachineName:  record.MachineName,
 		})
 	}
@@ -730,7 +734,7 @@ func applyRemoteChange(store *db.Store, workRoot string, change db.ChangeRecord,
 		if err := fileutil.WriteFileAtomically(targetPath, data); err != nil {
 			return err
 		}
-		return applyRecordedMtime(targetPath, change.MtimeNS)
+		return applyRecordedTimes(targetPath, change.CtimeNS, change.MtimeNS)
 	}
 }
 
@@ -756,12 +760,15 @@ func removePath(path string) error {
 	return nil
 }
 
-func applyRecordedMtime(path string, mtimeNS int64) error {
-	if mtimeNS <= 0 {
-		return nil
+func applyRecordedTimes(path string, ctimeNS, mtimeNS int64) error {
+	if mtimeNS > 0 {
+		timestamp := time.Unix(0, mtimeNS)
+		if err := os.Chtimes(path, timestamp, timestamp); err != nil {
+			return err
+		}
 	}
-	timestamp := time.Unix(0, mtimeNS)
-	return os.Chtimes(path, timestamp, timestamp)
+
+	return setCreationTime(path, ctimeNS)
 }
 
 func refreshLocalScanCache(workRoot string, store *db.Store) error {

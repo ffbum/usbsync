@@ -169,6 +169,7 @@ func knownEntriesFromCache(entries []fileutil.Entry) []KnownEntry {
 			DisplayPath:  entry.DisplayPath,
 			Kind:         entry.Kind,
 			Size:         entry.Size,
+			CtimeNS:      entry.CtimeNS,
 			MtimeNS:      entry.MtimeNS,
 			MD5:          entry.MD5,
 			LastRevision: entry.LastRevision,

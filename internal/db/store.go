@@ -3,8 +3,10 @@ package db
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -39,6 +41,7 @@ type EntryRecord struct {
 	DisplayPath  string
 	Kind         string
 	Size         int64
+	CtimeNS      int64
 	MtimeNS      int64
 	ContentMD5   string
 	Deleted      bool
@@ -55,6 +58,7 @@ type ChangeRecord struct {
 	Kind         string
 	BaseRevision int64
 	Size         int64
+	CtimeNS      int64
 	MtimeNS      int64
 	ContentMD5   string
 	BlobID       string
@@ -98,6 +102,39 @@ func (s *Store) Close() error {
 	}
 
 	return s.DB.Close()
+}
+
+func (s *Store) CheckIntegrity() error {
+	var result string
+	if err := s.DB.QueryRow(`PRAGMA quick_check(1)`).Scan(&result); err != nil {
+		return err
+	}
+	if strings.EqualFold(strings.TrimSpace(result), "ok") {
+		return nil
+	}
+	return fmt.Errorf("database integrity check failed: %s", strings.TrimSpace(result))
+}
+
+func ValidateDatabaseFile(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("missing database path")
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	store, err := OpenStore(path)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = store.Close()
+	}()
+
+	return store.CheckIntegrity()
 }
 
 func (s *Store) configure() error {
@@ -235,6 +272,7 @@ func (s *Store) ListEntries() ([]EntryRecord, error) {
 			display_path,
 			kind,
 			COALESCE(size, 0),
+			COALESCE(ctime_ns, 0),
 			COALESCE(mtime_ns, 0),
 			COALESCE(NULLIF(content_md5, ''), NULLIF(blob_id, ''), ''),
 			deleted,
@@ -258,6 +296,7 @@ func (s *Store) ListEntries() ([]EntryRecord, error) {
 			&record.DisplayPath,
 			&record.Kind,
 			&record.Size,
+			&record.CtimeNS,
 			&record.MtimeNS,
 			&record.ContentMD5,
 			&deleted,
@@ -283,6 +322,7 @@ func (s *Store) ListEntriesAtRevision(revision int64) ([]EntryRecord, error) {
 			c.display_path,
 			c.kind,
 			COALESCE(c.size, 0),
+			COALESCE(c.ctime_ns, 0),
 			COALESCE(c.mtime_ns, 0),
 			COALESCE(NULLIF(c.content_md5, ''), NULLIF(c.blob_id, ''), ''),
 			CASE WHEN c.op = 'delete' THEN 1 ELSE 0 END AS deleted,
@@ -312,6 +352,7 @@ func (s *Store) ListEntriesAtRevision(revision int64) ([]EntryRecord, error) {
 			&record.DisplayPath,
 			&record.Kind,
 			&record.Size,
+			&record.CtimeNS,
 			&record.MtimeNS,
 			&record.ContentMD5,
 			&deleted,
@@ -338,6 +379,7 @@ func (s *Store) ListChangesAfter(lastSeenRevision int64) ([]ChangeRecord, error)
 			c.kind,
 			c.base_revision,
 			COALESCE(c.size, 0),
+			COALESCE(c.ctime_ns, 0),
 			COALESCE(c.mtime_ns, 0),
 			COALESCE(NULLIF(c.content_md5, ''), NULLIF(c.blob_id, ''), ''),
 			COALESCE(c.blob_id, '')
@@ -364,6 +406,7 @@ func (s *Store) ListChangesAfter(lastSeenRevision int64) ([]ChangeRecord, error)
 			&record.Kind,
 			&record.BaseRevision,
 			&record.Size,
+			&record.CtimeNS,
 			&record.MtimeNS,
 			&record.ContentMD5,
 			&record.BlobID,
@@ -551,8 +594,8 @@ func (s *Store) CommitLocalChange(machineID string, change syncpreview.LocalChan
 	result, err := tx.Exec(`
 		INSERT INTO change_log (
 			machine_id, op, path_key, display_path, kind, base_revision,
-			size, mtime_ns, content_md5, blob_id, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			size, ctime_ns, mtime_ns, content_md5, blob_id, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		machineID,
 		normalizeChangeOp(change),
@@ -561,6 +604,7 @@ func (s *Store) CommitLocalChange(machineID string, change syncpreview.LocalChan
 		change.Kind,
 		change.BaseRevision,
 		nullableInt64(change.Size, change.Op == "delete" || change.Kind == "dir"),
+		nullableInt64(change.CtimeNS, change.Op == "delete"),
 		nullableInt64(change.MtimeNS, change.Op == "delete"),
 		nullableString(contentHash),
 		nullableString(blob.BlobID),
@@ -632,13 +676,14 @@ func upsertEntryTx(tx *sql.Tx, machineID string, revision int64, change syncprev
 
 	_, err := tx.Exec(`
 		INSERT INTO entries (
-			path_key, display_path, kind, size, mtime_ns, content_md5, blob_id, chunks,
+			path_key, display_path, kind, size, ctime_ns, mtime_ns, content_md5, blob_id, chunks,
 			deleted, last_revision, last_machine_id, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(path_key) DO UPDATE SET
 			display_path = excluded.display_path,
 			kind = excluded.kind,
 			size = excluded.size,
+			ctime_ns = excluded.ctime_ns,
 			mtime_ns = excluded.mtime_ns,
 			content_md5 = excluded.content_md5,
 			blob_id = excluded.blob_id,
@@ -652,6 +697,7 @@ func upsertEntryTx(tx *sql.Tx, machineID string, revision int64, change syncprev
 		change.DisplayPath,
 		change.Kind,
 		nullableInt64(change.Size, deleted == 1 || change.Kind == "dir"),
+		nullableInt64(change.CtimeNS, deleted == 1),
 		nullableInt64(change.MtimeNS, deleted == 1),
 		nullableString(contentHash),
 		nullableString(blob.BlobID),

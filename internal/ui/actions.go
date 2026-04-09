@@ -14,6 +14,7 @@ type ActionResult struct {
 	WorkRoot          string
 	DisplayName       string
 	BackupDir         string
+	DatabasePath      string
 	DriveStatus       string
 	Results           ResultSummary
 	ProgressRows      []progress.Event
@@ -24,3 +25,4 @@ type ActionResult struct {
 type ProgressHandler func(progress.Event)
 type ActionHandler func(FormState, ProgressHandler) ActionResult
 type DraftHandler func(FormState)
+type BeforeCloseHandler func() error

@@ -12,6 +12,7 @@ type KnownEntry struct {
 	DisplayPath  string
 	Kind         string
 	Size         int64
+	CtimeNS      int64
 	MtimeNS      int64
 	MD5          string
 	Deleted      bool
@@ -24,6 +25,7 @@ type LocalChange struct {
 	DisplayPath  string
 	Kind         string
 	Size         int64
+	CtimeNS      int64
 	MtimeNS      int64
 	MD5          string
 	BaseRevision int64
@@ -36,6 +38,7 @@ type RemoteChange struct {
 	DisplayPath  string
 	Kind         string
 	BaseRevision int64
+	CtimeNS      int64
 	MachineName  string
 }
 
@@ -82,6 +85,7 @@ func BuildLocalChanges(current []ScannedEntry, known []KnownEntry) []LocalChange
 				DisplayPath:  entry.DisplayPath,
 				Kind:         entry.Kind,
 				Size:         entry.Size,
+				CtimeNS:      entry.CtimeNS,
 				MtimeNS:      entry.MtimeNS,
 				MD5:          entry.MD5,
 				BaseRevision: knownEntry.LastRevision,
@@ -96,6 +100,7 @@ func BuildLocalChanges(current []ScannedEntry, known []KnownEntry) []LocalChange
 				DisplayPath:  entry.DisplayPath,
 				Kind:         entry.Kind,
 				Size:         entry.Size,
+				CtimeNS:      entry.CtimeNS,
 				MtimeNS:      entry.MtimeNS,
 				MD5:          entry.MD5,
 				BaseRevision: knownEntry.LastRevision,

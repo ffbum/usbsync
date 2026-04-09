@@ -44,6 +44,7 @@ func TestCommitLocalFileChangeWritesEntryChangeLogAndMachineState(t *testing.T) 
 		DisplayPath:  "docs/a.txt",
 		Kind:         "file",
 		Size:         5,
+		CtimeNS:      9,
 		MtimeNS:      10,
 		MD5:          "md5-1",
 		BaseRevision: 0,
@@ -68,6 +69,9 @@ func TestCommitLocalFileChangeWritesEntryChangeLogAndMachineState(t *testing.T) 
 	if records[0].ContentMD5 != "md5-1" {
 		t.Fatalf("unexpected md5: %s", records[0].ContentMD5)
 	}
+	if records[0].CtimeNS != 9 {
+		t.Fatalf("unexpected ctime: %d", records[0].CtimeNS)
+	}
 	if records[0].Deleted {
 		t.Fatal("expected active entry")
 	}
@@ -78,6 +82,9 @@ func TestCommitLocalFileChangeWritesEntryChangeLogAndMachineState(t *testing.T) 
 	}
 	if len(changes) != 1 || changes[0].Op != "add" {
 		t.Fatalf("unexpected changes: %#v", changes)
+	}
+	if changes[0].CtimeNS != 9 {
+		t.Fatalf("unexpected change ctime: %d", changes[0].CtimeNS)
 	}
 
 	state, err := store.GetMachineState("m1")
@@ -146,6 +153,7 @@ func TestCommitLocalFileChangeUsesBlobIDAsContentHashWhenMissing(t *testing.T) {
 		DisplayPath:  "docs/a.txt",
 		Kind:         "file",
 		Size:         5,
+		CtimeNS:      9,
 		MtimeNS:      10,
 		BaseRevision: 0,
 	}, BlobWrite{

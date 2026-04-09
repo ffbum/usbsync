@@ -68,6 +68,7 @@ func buildRuntimeViewModel(state StartupState, stateErr error, controller runtim
 	vm.OnSync = controller.handleSync
 	vm.OnDraftChanged = controller.handleDraftChanged
 	vm.OnDraftCommit = controller.handleDraftChanged
+	vm.OnBeforeClose = controller.handleBeforeClose
 	return vm
 }
 
@@ -103,7 +104,7 @@ func (c runtimeController) handleDraftChanged(form ui.FormState) {
 func (c runtimeController) handleInitialize(form ui.FormState, report ui.ProgressHandler) ui.ActionResult {
 	cfg, state, driveErr, result := c.prepareActionResult(form)
 	if driveErr != nil {
-		result.Results = failureSummary("当前 U 盘不可用", driveErr)
+		result.Results = failureSummary("程序目录不可用", driveErr)
 		return result
 	}
 	if err := validateActionPaths(result.WorkRoot, result.BackupDir); err != nil {
@@ -185,7 +186,7 @@ func (c runtimeController) handleInitialize(form ui.FormState, report ui.Progres
 	result = actionResultFromState(updatedState, nil)
 	result.ProgressRows = initResult.Progress
 	result.Results = ui.ResultSummary{
-		Status: "当前 U 盘已初始化，可以开始同步",
+		Status: "数据库已初始化，可以开始同步",
 	}
 	if backupErr != nil {
 		result.Results.AddFailure("初始化已完成，但本机备份没有刷新：" + backupErr.Error())
@@ -202,7 +203,7 @@ func (c runtimeController) handleSync(form ui.FormState, report ui.ProgressHandl
 	if !state.Drive.DatabaseExists {
 		result.InitializeEnabled = true
 		result.SyncEnabled = false
-		result.Results = failureSummary("同步未开始", fmt.Errorf("当前 U 盘还没有 USBSync.db"))
+		result.Results = failureSummary("同步未开始", fmt.Errorf("程序目录还没有 USBSync.db"))
 		return result
 	}
 	if err := validateActionPaths(result.WorkRoot, result.BackupDir); err != nil {
@@ -231,7 +232,7 @@ func (c runtimeController) handleSync(form ui.FormState, report ui.ProgressHandl
 		result.InitializeEnabled = true
 		result.SyncEnabled = false
 		result.Results = ui.ResultSummary{
-			Status: "工作文件夹已更换，请重新初始化当前 U 盘",
+			Status: "工作文件夹已更换，请重新初始化数据库",
 		}
 		return result
 	}
@@ -298,6 +299,7 @@ func (c runtimeController) prepareActionResult(form ui.FormState) (config.Machin
 			WorkRoot:          strings.TrimSpace(form.WorkRoot),
 			DisplayName:       strings.TrimSpace(form.DisplayName),
 			BackupDir:         strings.TrimSpace(form.BackupDir),
+			DatabasePath:      "",
 			DriveStatus:       err.Error(),
 			Results:           summary,
 			InitializeEnabled: false,
@@ -407,19 +409,13 @@ func (c runtimeController) loadSyncContext(cfg config.MachineConfig, drive usb.D
 	if err != nil {
 		return 0, "", err
 	}
-	if strings.TrimSpace(cfg.BoundDeviceID) != "" && cfg.BoundDeviceID != meta.DeviceID {
-		return 0, "", fmt.Errorf("当前 U 盘不是这台电脑原来绑定的那一只")
-	}
-	if strings.TrimSpace(cfg.BoundVolumeID) != "" && drive.VolumeID != "" && cfg.BoundVolumeID != drive.VolumeID {
-		return 0, "", fmt.Errorf("当前 U 盘卷标识与上次记录不一致")
-	}
 	if err := store.UpsertMachine(cfg.MachineID, displayName, workRoot, seenAt); err != nil {
 		return 0, "", err
 	}
 
 	state, err := store.GetMachineState(cfg.MachineID)
 	if err != nil {
-		return 0, "", fmt.Errorf("这台电脑还没有在当前 U 盘完成初始化")
+		return 0, "", fmt.Errorf("这台电脑还没有完成数据库初始化")
 	}
 
 	return state.LastSeenRevision, meta.DeviceID, nil
@@ -431,6 +427,7 @@ func actionResultFromState(state StartupState, stateErr error) ui.ActionResult {
 		WorkRoot:          vm.WorkRoot,
 		DisplayName:       vm.DisplayName,
 		BackupDir:         vm.BackupDir,
+		DatabasePath:      vm.DatabasePath,
 		DriveStatus:       vm.DriveStatus,
 		Results:           vm.Results,
 		ProgressRows:      vm.ProgressRows,
@@ -522,7 +519,7 @@ func buildSyncSummary(result SyncCurrentUSBResult) ui.ResultSummary {
 		switch item.Decision {
 		case syncpreview.DecisionApplyRemote, syncpreview.DecisionKeepRemoteWithWarning:
 			if item.Decision == syncpreview.DecisionKeepRemoteWithWarning {
-				summary.AddWarning("已采用 U 盘中的版本：" + item.PathKey)
+				summary.AddWarning("已采用数据库中的版本：" + item.PathKey)
 			}
 		case syncpreview.DecisionConflict:
 			if item.ConflictDisplayPath != "" {
@@ -540,7 +537,7 @@ func buildSyncSummary(result SyncCurrentUSBResult) ui.ResultSummary {
 		summary.Status = "同步完成，没有发现新变化"
 	default:
 		status := fmt.Sprintf(
-			"同步完成：本地%s，写入 U 盘 %d 项，写回本地%s",
+			"同步完成：本地%s，写入数据库 %d 项，写回本地%s",
 			localBreakdown.SummaryText(),
 			result.CommittedCount,
 			result.RemoteAppliedBreakdown.SummaryText(),
@@ -570,14 +567,25 @@ func remoteApplyDetail(op string) string {
 func commitDetail(op string) string {
 	switch op {
 	case "delete":
-		return "已将删除记录写入 U 盘数据库"
+		return "已将删除记录写入数据库"
 	case "mkdir", "add":
-		return "已将新增内容写入 U 盘数据库"
+		return "已将新增内容写入数据库"
 	case "modify":
-		return "已将修改内容写入 U 盘数据库"
+		return "已将修改内容写入数据库"
 	default:
-		return "已写入 U 盘数据库"
+		return "已写入数据库"
 	}
+}
+
+func (c runtimeController) handleBeforeClose() error {
+	drive, err := c.currentDrive()
+	if err != nil {
+		return err
+	}
+	if !drive.DatabaseExists {
+		return nil
+	}
+	return db.ValidateDatabaseFile(drive.DBPath)
 }
 
 func validateActionPaths(workRoot, backupDir string) error {

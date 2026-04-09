@@ -1,4 +1,15 @@
-USBSync.exe
-USBSync.exe.manifest
-usbsync.json
+# Build artifacts
+/USBSync.exe
+/USBSync.exe.manifest
+/USBSync.db
+/USBSync.db-journal
+/bin/
+/dist/
 
+# Runtime/local state
+/usbsync.json
+/.usbsync/
+*.log
+
+# Optional local toolchain cache (not part of source release)
+/tools/

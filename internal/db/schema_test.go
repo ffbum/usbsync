@@ -44,10 +44,64 @@ func TestInitCreatesWorkspaceGenerationFields(t *testing.T) {
 	}{
 		{table: "device_meta", column: "workspace_generation"},
 		{table: "machine_state", column: "last_workspace_generation"},
+		{table: "entries", column: "ctime_ns"},
+		{table: "change_log", column: "ctime_ns"},
 	} {
 		if !hasColumn(t, db, tc.table, tc.column) {
 			t.Fatalf("missing column %s.%s", tc.table, tc.column)
 		}
+	}
+}
+
+func TestInitSchemaAddsCreationTimeColumnsForLegacyDatabase(t *testing.T) {
+	db := openTempDB(t)
+
+	if _, err := db.Exec(`
+		CREATE TABLE entries (
+			path_key         TEXT PRIMARY KEY,
+			display_path     TEXT NOT NULL,
+			kind             TEXT NOT NULL,
+			size             INTEGER,
+			mtime_ns         INTEGER,
+			content_md5      TEXT,
+			blob_id          TEXT,
+			chunks           INTEGER DEFAULT 0,
+			deleted          INTEGER NOT NULL DEFAULT 0,
+			last_revision    INTEGER NOT NULL,
+			last_machine_id  TEXT NOT NULL,
+			updated_at       TEXT NOT NULL
+		);
+	`); err != nil {
+		t.Fatalf("create legacy entries table: %v", err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE change_log (
+			revision      INTEGER PRIMARY KEY AUTOINCREMENT,
+			machine_id    TEXT NOT NULL,
+			op            TEXT NOT NULL,
+			path_key      TEXT NOT NULL,
+			display_path  TEXT NOT NULL,
+			kind          TEXT NOT NULL,
+			base_revision INTEGER NOT NULL,
+			size          INTEGER,
+			mtime_ns      INTEGER,
+			content_md5   TEXT,
+			blob_id       TEXT,
+			created_at    TEXT NOT NULL
+		);
+	`); err != nil {
+		t.Fatalf("create legacy change_log table: %v", err)
+	}
+
+	if err := InitSchema(db); err != nil {
+		t.Fatalf("init schema with migration: %v", err)
+	}
+
+	if !hasColumn(t, db, "entries", "ctime_ns") {
+		t.Fatal("expected entries.ctime_ns to be added")
+	}
+	if !hasColumn(t, db, "change_log", "ctime_ns") {
+		t.Fatal("expected change_log.ctime_ns to be added")
 	}
 }
 

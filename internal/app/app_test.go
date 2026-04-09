@@ -97,7 +97,7 @@ func TestBuildMainViewModelEnablesInitializeWhenDatabaseMissing(t *testing.T) {
 	if vm.SyncEnabled {
 		t.Fatal("expected sync button to be disabled")
 	}
-	if vm.DriveStatus != "当前 U 盘：E:  卷名：WORKUSB" {
+	if vm.DriveStatus != `E:\USBSync.db` {
 		t.Fatalf("unexpected drive status: %s", vm.DriveStatus)
 	}
 }
@@ -136,7 +136,7 @@ func TestBuildMainViewModelRequiresReinitializeWhenWorkRootChanged(t *testing.T)
 	if vm.SyncEnabled {
 		t.Fatal("expected sync button disabled after work root change")
 	}
-	if vm.Results.Status != "工作文件夹已更换，请重新初始化当前 U 盘" {
+	if vm.Results.Status != "工作文件夹已更换，请重新初始化数据库" {
 		t.Fatalf("unexpected status: %s", vm.Results.Status)
 	}
 }
@@ -168,6 +168,83 @@ func TestBuildRuntimeViewModelProvidesActionHandlers(t *testing.T) {
 	}
 	if vm.OnDraftChanged == nil {
 		t.Fatal("expected draft handler")
+	}
+	if vm.OnBeforeClose == nil {
+		t.Fatal("expected before close handler")
+	}
+}
+
+func TestHandleBeforeCloseRejectsCorruptedDatabase(t *testing.T) {
+	exeDir := t.TempDir()
+	exePath := filepath.Join(exeDir, "USBSync.exe")
+	dbPath := filepath.Join(exeDir, "USBSync.db")
+	if err := os.WriteFile(exePath, []byte("exe"), 0o644); err != nil {
+		t.Fatalf("write exe: %v", err)
+	}
+	if err := os.WriteFile(dbPath, []byte("not-a-database"), 0o644); err != nil {
+		t.Fatalf("write db: %v", err)
+	}
+
+	controller := newRuntimeController(
+		filepath.Join(t.TempDir(), "usbsync.json"),
+		func() (usb.DriveProbe, error) {
+			return usb.DriveProbe{ExePath: exePath, VolumeID: "VOLX"}, nil
+		},
+		func() time.Time { return time.Unix(0, 0) },
+		func() (string, error) { return "Office", nil },
+	)
+
+	if err := controller.handleBeforeClose(); err == nil {
+		t.Fatal("expected corrupted database validation error")
+	}
+}
+
+func TestLoadSyncContextIgnoresLegacyBoundDeviceAndVolume(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "USBSync.db")
+	store, err := db.OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := store.InitializeDeviceMeta("device-real", 1, "2026-03-30T00:00:00Z", 2); err != nil {
+		t.Fatalf("initialize meta: %v", err)
+	}
+	if err := store.UpsertMachine("machine-1", "Office", `D:\work`, "2026-03-30T00:00:00Z"); err != nil {
+		t.Fatalf("upsert machine: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	controller := newRuntimeController(
+		filepath.Join(t.TempDir(), "usbsync.json"),
+		nil,
+		func() time.Time { return time.Unix(0, 0) },
+		func() (string, error) { return "Office", nil },
+	)
+
+	lastSeen, deviceID, err := controller.loadSyncContext(
+		config.MachineConfig{
+			MachineID:     "machine-1",
+			BoundDeviceID: "device-old",
+			BoundVolumeID: "VOL-OLD",
+		},
+		usb.DriveContext{
+			DBPath:     dbPath,
+			VolumeID:   "VOL-NEW",
+			VolumeName: "ANY",
+		},
+		"Office",
+		`D:\work`,
+		"2026-03-30T00:00:00Z",
+	)
+	if err != nil {
+		t.Fatalf("load sync context: %v", err)
+	}
+	if lastSeen != 0 {
+		t.Fatalf("unexpected last seen revision: %d", lastSeen)
+	}
+	if deviceID != "device-real" {
+		t.Fatalf("unexpected device id: %s", deviceID)
 	}
 }
 
@@ -934,7 +1011,7 @@ func TestSyncActionRequiresReinitializeAfterWorkRootChange(t *testing.T) {
 	if result.SyncEnabled {
 		t.Fatal("expected sync disabled")
 	}
-	if result.Results.Status != "工作文件夹已更换，请重新初始化当前 U 盘" {
+	if result.Results.Status != "工作文件夹已更换，请重新初始化数据库" {
 		t.Fatalf("unexpected status: %s", result.Results.Status)
 	}
 }

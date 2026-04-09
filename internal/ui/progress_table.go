@@ -64,7 +64,7 @@ func phaseLabel(phase string) string {
 	case "conflict":
 		return "冲突"
 	case "commit":
-		return "写入 U 盘"
+		return "写入数据库"
 	case "state":
 		return "更新状态"
 	default:

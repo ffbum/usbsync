@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	progress "usbsync/internal/sync"
@@ -147,7 +148,7 @@ func TestPhaseLabelUsesChineseName(t *testing.T) {
 	if got := phaseLabel("initialize"); got != "初始化" {
 		t.Fatalf("unexpected phase label: %s", got)
 	}
-	if got := phaseLabel("commit"); got != "写入 U 盘" {
+	if got := phaseLabel("commit"); got != "写入数据库" {
 		t.Fatalf("unexpected phase label: %s", got)
 	}
 }
@@ -208,7 +209,7 @@ func TestApplyActionResultKeepsLatestRowVisible(t *testing.T) {
 	}
 
 	window.applyActionResult(ActionResult{
-		DriveStatus: "当前 U 盘：E:",
+		DriveStatus: `E:\apps\usbsync\USBSync.db`,
 		Results:     ResultSummary{Status: "同步完成"},
 		ProgressRows: []progress.Event{
 			{Phase: "scan", Item: "a"},
@@ -222,5 +223,33 @@ func TestApplyActionResultKeepsLatestRowVisible(t *testing.T) {
 	}
 	if len(viewport.visibleIndexes) == 0 || viewport.visibleIndexes[len(viewport.visibleIndexes)-1] != 2 {
 		t.Fatalf("expected latest visible index 2, got %#v", viewport.visibleIndexes)
+	}
+}
+
+func TestCanCloseRejectsWhenActionIsRunning(t *testing.T) {
+	window := &MainWindow{runningAction: true}
+	err := window.canClose()
+	if err == nil {
+		t.Fatal("expected close rejection while action is running")
+	}
+	if !strings.Contains(err.Error(), "不能退出") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCanCloseRunsBeforeCloseValidation(t *testing.T) {
+	window := &MainWindow{
+		viewModel: MainViewModel{
+			OnBeforeClose: func() error {
+				return fmt.Errorf("db check failed")
+			},
+		},
+	}
+	err := window.canClose()
+	if err == nil {
+		t.Fatal("expected close validation error")
+	}
+	if err.Error() != "db check failed" {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

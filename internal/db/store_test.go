@@ -1,6 +1,7 @@
 package db
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -86,4 +87,24 @@ func openTempStore(t *testing.T) *Store {
 	}
 
 	return store
+}
+
+func TestCheckIntegrityPassesForHealthyDatabase(t *testing.T) {
+	store := openTempStore(t)
+	defer store.Close()
+
+	if err := store.CheckIntegrity(); err != nil {
+		t.Fatalf("check integrity: %v", err)
+	}
+}
+
+func TestValidateDatabaseFileRejectsCorruptedDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "USBSync.db")
+	if err := os.WriteFile(path, []byte("this is not sqlite"), 0o644); err != nil {
+		t.Fatalf("write corrupted db: %v", err)
+	}
+
+	if err := ValidateDatabaseFile(path); err == nil {
+		t.Fatal("expected corrupted database error")
+	}
 }

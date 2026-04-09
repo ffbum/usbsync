@@ -14,6 +14,7 @@ type Entry struct {
 	DisplayPath  string `json:"display_path"`
 	Kind         string `json:"kind"`
 	Size         int64  `json:"size"`
+	CtimeNS      int64  `json:"ctime_ns"`
 	MtimeNS      int64  `json:"mtime_ns"`
 	MD5          string `json:"md5,omitempty"`
 	LastRevision int64  `json:"last_revision,omitempty"`
@@ -68,6 +69,7 @@ func ScanWorktree(workRoot string) ([]Entry, error) {
 		entry := Entry{
 			PathKey:     pathKey,
 			DisplayPath: displayPath,
+			CtimeNS:     creationTimeUnixNano(info),
 			MtimeNS:     info.ModTime().UnixNano(),
 		}
 		if dirEntry.IsDir() {

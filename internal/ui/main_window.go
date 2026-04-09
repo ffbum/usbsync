@@ -4,7 +4,9 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/lxn/walk"
@@ -17,6 +19,7 @@ type MainViewModel struct {
 	WorkRoot          string
 	DisplayName       string
 	BackupDir         string
+	DatabasePath      string
 	DriveStatus       string
 	InitializeEnabled bool
 	SyncEnabled       bool
@@ -26,6 +29,7 @@ type MainViewModel struct {
 	OnSync            ActionHandler
 	OnDraftChanged    DraftHandler
 	OnDraftCommit     DraftHandler
+	OnBeforeClose     BeforeCloseHandler
 }
 
 type MainWindow struct {
@@ -85,19 +89,19 @@ func NewMainWindow(vm MainViewModel) (*MainWindow, error) {
 					D.Label{Text: "备份目录"},
 					D.LineEdit{AssignTo: &shell.backupDirEdit, Text: vm.BackupDir, OnTextChanged: shell.handleDraftChanged, OnEditingFinished: shell.handleBackupDirEditingFinished},
 					D.PushButton{AssignTo: &shell.backupPickBtn, Text: "选择…", OnMouseDown: shell.preparePickFolder, OnClicked: shell.pickBackupDir},
-					D.Label{Text: "U 盘状态"},
+					D.Label{Text: "数据库"},
 					D.Label{AssignTo: &shell.statusLabel, Text: vm.DriveStatus, ColumnSpan: 2},
 				},
 			},
 			D.Composite{
 				Layout: D.HBox{},
 				Children: []D.Widget{
-					D.PushButton{AssignTo: &shell.initButton, Text: "初始化当前 U 盘", Enabled: vm.InitializeEnabled, OnClicked: shell.handleInitialize},
+					D.PushButton{AssignTo: &shell.initButton, Text: "初始化数据库", Enabled: vm.InitializeEnabled, OnClicked: shell.handleInitialize},
 					D.PushButton{AssignTo: &shell.syncButton, Text: "同步", Enabled: vm.SyncEnabled, OnClicked: shell.handleSync},
 					D.PushButton{
 						AssignTo:  &shell.openBackupBtn,
-						Text:      "打开备份目录",
-						OnClicked: shell.openBackupDir,
+						Text:      "打开数据库目录",
+						OnClicked: shell.openDatabaseDir,
 					},
 				},
 			},
@@ -155,11 +159,23 @@ func NewMainWindow(vm MainViewModel) (*MainWindow, error) {
 	}
 
 	shell.window = mw
+	shell.applyWindowIcon()
 	shell.progressViewport = shell.progressTable
-	if shell.window != nil && vm.OnDraftCommit != nil {
+	if shell.window != nil {
 		shell.window.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
+			if shell.runningAction {
+				*canceled = true
+				walk.MsgBox(shell.window, "USBSync", "正在执行同步，写入数据库期间不能退出。", walk.MsgBoxOK|walk.MsgBoxIconWarning)
+				return
+			}
 			shell.suppressNextValidationPopup = true
-			shell.handleDraftCommit()
+			if vm.OnDraftCommit != nil {
+				shell.handleDraftCommit()
+			}
+			if err := shell.canClose(); err != nil {
+				*canceled = true
+				walk.MsgBox(shell.window, "USBSync", "退出前数据库检查失败："+err.Error(), walk.MsgBoxOK|walk.MsgBoxIconError)
+			}
 		})
 	}
 	shell.progressModel.Reset(vm.ProgressRows)
@@ -176,20 +192,20 @@ func (w *MainWindow) Run() (int, error) {
 	return w.window.Run(), nil
 }
 
-func (w *MainWindow) openBackupDir() {
-	backupDir := textValue(w.backupDirEdit)
-	if backupDir == "" {
+func (w *MainWindow) openDatabaseDir() {
+	databasePath := strings.TrimSpace(w.viewModel.DatabasePath)
+	if databasePath == "" {
 		return
 	}
 
-	_ = exec.Command("explorer.exe", backupDir).Start()
+	_ = exec.Command("explorer.exe", filepath.Dir(databasePath)).Start()
 }
 
 func (w *MainWindow) handleInitialize() {
 	if w.viewModel.OnInitialize == nil {
 		return
 	}
-	w.runAction("正在初始化当前 U 盘…", w.viewModel.OnInitialize)
+	w.runAction("正在初始化数据库…", w.viewModel.OnInitialize)
 }
 
 func (w *MainWindow) handleSync() {
@@ -404,6 +420,9 @@ func (w *MainWindow) applyActionResult(result ActionResult) {
 			w.backupDirEdit.SetText(result.BackupDir)
 		}
 	}
+	if result.DatabasePath != "" {
+		w.viewModel.DatabasePath = result.DatabasePath
+	}
 	w.viewModel.Results = result.Results
 	w.viewModel.DriveStatus = result.DriveStatus
 	w.viewModel.ProgressRows = append([]progress.Event(nil), result.ProgressRows...)
@@ -613,6 +632,42 @@ func (w *MainWindow) scrollProgressToLatest() {
 	}
 	_ = w.progressViewport.SetCurrentIndex(lastIndex)
 	w.progressViewport.EnsureItemVisible(lastIndex)
+}
+
+func (w *MainWindow) canClose() error {
+	if w == nil {
+		return nil
+	}
+	if w.runningAction {
+		return fmt.Errorf("正在执行同步，写入数据库期间不能退出")
+	}
+	if w.viewModel.OnBeforeClose != nil {
+		return w.viewModel.OnBeforeClose()
+	}
+	return nil
+}
+
+func (w *MainWindow) applyWindowIcon() {
+	if w == nil || w.window == nil {
+		return
+	}
+
+	if icon, err := walk.NewIconFromResource("APPICON"); err == nil {
+		_ = w.window.SetIcon(icon)
+		return
+	}
+	if icon, err := walk.NewIconFromResourceId(1); err == nil {
+		_ = w.window.SetIcon(icon)
+		return
+	}
+
+	// Last fallback for dev runs before resource embedding.
+	if exePath, err := os.Executable(); err == nil {
+		iconPath := filepath.Join(filepath.Dir(exePath), "usbsync.ico")
+		if icon, iconErr := walk.NewIconFromFile(iconPath); iconErr == nil {
+			_ = w.window.SetIcon(icon)
+		}
+	}
 }
 
 func progressGroupHeight() int {
